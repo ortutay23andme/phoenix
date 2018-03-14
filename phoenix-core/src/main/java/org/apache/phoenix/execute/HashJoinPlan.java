@@ -153,6 +153,7 @@ public class HashJoinPlan extends DelegateQueryPlan {
             keyRangeExpressions = new CopyOnWriteArrayList<Expression>();
         }
         
+        System.out.println("Starting cache calls");
         for (int i = 0; i < count; i++) {
             final int index = i;
             futures.add(executor.submit(new JobCallable<ServerCache>() {
@@ -175,6 +176,8 @@ public class HashJoinPlan extends DelegateQueryPlan {
             }));
         }
         
+        long start = System.currentTimeMillis();
+        System.out.println("Waiting on cache calls");
         SQLException firstException = null;
         for (int i = 0; i < count; i++) {
             try {
@@ -199,6 +202,9 @@ public class HashJoinPlan extends DelegateQueryPlan {
             SQLCloseables.closeAllQuietly(dependencies);
             throw firstException;
         }
+        long end = System.currentTimeMillis();
+        long took = end - start;
+        System.out.println("Done with cache calls, took " + (took) + "msec");
         
         Expression postFilter = null;
         boolean hasKeyRangeExpressions = keyRangeExpressions != null && !keyRangeExpressions.isEmpty();

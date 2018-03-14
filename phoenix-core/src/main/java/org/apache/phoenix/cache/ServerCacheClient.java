@@ -35,6 +35,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
+import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.HRegionLocation;
@@ -140,6 +141,7 @@ public class ServerCacheClient {
          */
         @Override
         public void close() throws SQLException {
+        	System.out.println("Server cache closing");
             removeServerCache(id, servers);
         }
 
@@ -180,6 +182,10 @@ public class ServerCacheClient {
                     servers.add(entry);
                     if (LOG.isDebugEnabled()) {LOG.debug(addCustomAnnotations("Adding cache entry to be sent for " + entry, connection));}
                     final byte[] key = entry.getRegionInfo().getStartKey();
+                    System.out.println("Cache ID:" + Hex.encodeHexString( cacheId ));
+                    System.out.println(
+                    		"regionStartKey: " + Hex.encodeHexString(regionStartKey) + 
+                    		", regionEndKey: " + Hex.encodeHexString(regionEndKey));
                     final HTableInterface htable = services.getTable(cacheUsingTableRef.getTable().getPhysicalName().getBytes());
                     closeables.add(htable);
                     futures.add(executor.submit(new JobCallable<Boolean>() {
