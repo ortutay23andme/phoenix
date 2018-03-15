@@ -20,9 +20,12 @@ package org.apache.phoenix.execute;
 import static org.apache.phoenix.monitoring.TaskExecutionMetricsHolder.NO_OP_INSTANCE;
 import static org.apache.phoenix.util.LogUtil.addCustomAnnotations;
 
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.sql.SQLException;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
@@ -30,6 +33,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.client.Scan;
@@ -77,6 +81,7 @@ import org.apache.phoenix.util.SQLCloseable;
 import org.apache.phoenix.util.SQLCloseables;
 
 import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 
 public class HashJoinPlan extends DelegateQueryPlan {
@@ -92,6 +97,7 @@ public class HashJoinPlan extends DelegateQueryPlan {
     private HashCacheClient hashClient;
     private AtomicLong firstJobEndTime;
     private List<Expression> keyRangeExpressions;
+    private static Map<String, ServerCache> cacheIdMap = Maps.newHashMap();
     
     public static HashJoinPlan create(SelectStatement statement, 
             QueryPlan plan, HashJoinInfo joinInfo, SubPlan[] subPlans) {
@@ -135,7 +141,7 @@ public class HashJoinPlan extends DelegateQueryPlan {
     
     @Override
     public ResultIterator iterator() throws SQLException {
-    	return iterator(DefaultParallelScanGrouper.getInstance());
+        return iterator(DefaultParallelScanGrouper.getInstance());
     }
 
     @Override
@@ -153,14 +159,35 @@ public class HashJoinPlan extends DelegateQueryPlan {
             keyRangeExpressions = new CopyOnWriteArrayList<Expression>();
         }
         
+        System.out.println("Statement is:" + this.getStatement().toString());
+        System.out.println("Join info is:" + this.joinInfo.toString());
+        System.out.println("Cache ID map currenlty contains:");
+        for (String key : cacheIdMap.keySet()) {
+            System.out.println("- " + key + " -> " + Hex.encodeHexString(cacheIdMap.get(key).getId()));
+        }
         System.out.println("Starting cache calls");
         for (int i = 0; i < count; i++) {
             final int index = i;
+            MessageDigest digest = null;
+            try {
+                digest = MessageDigest.getInstance("SHA-256");
+            } catch (NoSuchAlgorithmException e) {
+                // TODO Auto-generated catch block
+                e.printStackTrace();
+            }
+            final byte[] hash = digest.digest(subPlans[i].getInnerPlan().getStatement().toString().getBytes());
             futures.add(executor.submit(new JobCallable<ServerCache>() {
 
                 @Override
                 public ServerCache call() throws Exception {
-                    ServerCache cache = subPlans[index].execute(HashJoinPlan.this);
+                    ServerCache cache;
+                    Object key = Hex.encodeHexString(hash);
+                    if (cacheIdMap.containsKey(key)) {
+                        System.out.println("There is already a cache ID for " + key);
+                        cache = cacheIdMap.get(key);
+                    } else {
+                        cache = subPlans[index].execute(HashJoinPlan.this);
+                    }
                     return cache;
                 }
 
@@ -186,6 +213,18 @@ public class HashJoinPlan extends DelegateQueryPlan {
                     dependencies.add(result);
                 }
                 subPlans[i].postProcess(result, this);
+
+                MessageDigest digest = null;
+                try {
+                    digest = MessageDigest.getInstance("SHA-256");
+                } catch (NoSuchAlgorithmException e) {
+                    // TODO Auto-generated catch block
+                    e.printStackTrace();
+                }
+                byte[] hash = digest.digest(subPlans[i].getInnerPlan().getStatement().toString().getBytes());
+                System.out.println("- Cache ID returned:" + Hex.encodeHexString(result.getId()) + " for query with hash " + 
+                        Hex.encodeHexString(hash));
+                cacheIdMap.put(Hex.encodeHexString(hash), result);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 if (firstException == null) {
@@ -274,6 +313,7 @@ public class HashJoinPlan extends DelegateQueryPlan {
     protected interface SubPlan {
         public ServerCache execute(HashJoinPlan parent) throws SQLException;
         public void postProcess(ServerCache result, HashJoinPlan parent) throws SQLException;
+        public void postProcessFromCacheId(byte[] cacheId, HashJoinPlan parent);
         public List<String> getPreSteps(HashJoinPlan parent) throws SQLException;
         public List<String> getPostSteps(HashJoinPlan parent) throws SQLException;
         public QueryPlan getInnerPlan();
@@ -331,6 +371,10 @@ public class HashJoinPlan extends DelegateQueryPlan {
 
         @Override
         public void postProcess(ServerCache result, HashJoinPlan parent) throws SQLException {
+        }
+
+        @Override
+        public void postProcessFromCacheId(byte[] cacheId, HashJoinPlan parent) {
         }
 
         @Override
@@ -413,6 +457,11 @@ public class HashJoinPlan extends DelegateQueryPlan {
             if (cache != null) {
                 parent.joinInfo.getJoinIds()[index].set(cache.getId());
             }
+        }
+
+        @Override
+        public void postProcessFromCacheId(byte[] cacheId, HashJoinPlan parent) {
+            parent.joinInfo.getJoinIds()[index].set(cacheId);
         }
 
         @Override

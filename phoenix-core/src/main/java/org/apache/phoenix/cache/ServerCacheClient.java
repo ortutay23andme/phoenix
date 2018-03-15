@@ -142,7 +142,8 @@ public class ServerCacheClient {
         @Override
         public void close() throws SQLException {
         	System.out.println("Server cache closing");
-            removeServerCache(id, servers);
+        	System.out.println("NOT removing server cache");
+//            removeServerCache(id, servers);
         }
 
     }
